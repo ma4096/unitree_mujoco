@@ -3,6 +3,8 @@ import numpy as np
 import pygame
 import sys
 import struct
+from mujoco_lidar import MjLidarWrapper, scan_gen
+from mujoco import mj_copyData, MjData
 
 from unitree_sdk2py.core.channel import ChannelSubscriber, ChannelPublisher
 
@@ -22,10 +24,15 @@ else:
     from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowState_
     from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowState_ as LowState_default
 
+from unitree_sdk2py.idl.sensor_msgs.msg.dds_ import PointCloud2_, PointField_
+from unitree_sdk2py.idl.default import sensor_msgs_msg_dds__PointField_Constants_PointCloud2_ as PointCloud2_default
+from unitree_sdk2py.idl.builtin_interfaces.msg.dds_ import *
+
 TOPIC_LOWCMD = "rt/lowcmd"
 TOPIC_LOWSTATE = "rt/lowstate"
 TOPIC_HIGHSTATE = "rt/sportmodestate"
 TOPIC_WIRELESS_CONTROLLER = "rt/wirelesscontroller"
+TOPIC_LIDAR = "rt/utlidar/cloud"
 
 MOTOR_SENSOR_NUM = 3
 NUM_MOTOR_IDL_GO = 20
@@ -33,9 +40,20 @@ NUM_MOTOR_IDL_HG = 35
 
 class UnitreeSdk2Bridge:
 
-    def __init__(self, mj_model, mj_data):
+    def __init__(self, mj_model, mj_data, locker=None, slower_than_real=False):
         self.mj_model = mj_model
         self.mj_data = mj_data
+
+        self.slower_than_real = slower_than_real # blocks starting the 500Hz threads in favour of calling them from the simulation thread when the correct time has passed
+
+        self.FORCE_SYNC = False
+        if locker is not None:
+            self.locker = locker
+            self.FORCE_SYNC = True
+
+        self.lidar_dt = 0.1
+        self.last_lidar_time = mj_data.time
+        self.lidar_copy_of_mj_data = MjData(mj_model)
 
         self.num_motor = self.mj_model.nu
         self.dim_motor_sensor = MOTOR_SENSOR_NUM * self.num_motor
@@ -63,7 +81,6 @@ class UnitreeSdk2Bridge:
         self.lowStateThread = RecurrentThread(
             interval=self.dt, target=self.PublishLowState, name="sim_lowstate"
         )
-        self.lowStateThread.Start()
 
         self.high_state = unitree_go_msg_dds__SportModeState_()
         self.high_state_puber = ChannelPublisher(TOPIC_HIGHSTATE, SportModeState_)
@@ -71,7 +88,6 @@ class UnitreeSdk2Bridge:
         self.HighStateThread = RecurrentThread(
             interval=self.dt, target=self.PublishHighState, name="sim_highstate"
         )
-        self.HighStateThread.Start()
 
         self.wireless_controller = unitree_go_msg_dds__WirelessController_()
         self.wireless_controller_puber = ChannelPublisher(
@@ -83,10 +99,71 @@ class UnitreeSdk2Bridge:
             target=self.PublishWirelessController,
             name="sim_wireless_controller",
         )
-        self.WirelessControllerThread.Start()
 
         self.low_cmd_suber = ChannelSubscriber(TOPIC_LOWCMD, LowCmd_)
         self.low_cmd_suber.Init(self.LowCmdHandler, 10)
+
+        # lidar setup and publisher        
+         
+        lidar_type = "mid360" # the default value of the copied example.
+        # needs investigation into what actually fits the real lidar on the Go2
+        # this is copied from https://github.com/discoverse-dev/MuJoCo-LiDAR/blob/main/examples/unitree_go2.py
+        self.dynamic_lidar = False
+
+        if lidar_type == "airy":
+            self.rays_theta, self.rays_phi = scan_gen.generate_airy96()
+        elif lidar_type == "mid360":
+            self.livox_generator = scan_gen.LivoxGenerator(lidar_type)
+            self.rays_theta, self.rays_phi = self.livox_generator.sample_ray_angles()
+            self.dynamic_lidar = True
+        self.stand = False # default from copied example
+
+        self.rays_theta = np.ascontiguousarray(self.rays_theta).astype(np.float32)
+        self.rays_phi = np.ascontiguousarray(self.rays_phi).astype(np.float32)
+
+        geomgroup = np.ones((mujoco.mjNGROUP,), dtype=np.ubyte)
+        geomgroup[3:] = 0  # 排除group 1中的几何体
+        self.lidar = MjLidarWrapper(
+            mj_model,
+            site_name="lidar",
+            backend="cpu", # for now cpu only, maybe gpu one day
+            args={"bodyexclude": mj_model.body("base_link").id, "geomgroup": geomgroup},
+        )
+
+        self.lidar_data = PointCloud2_default()
+        # mostly copied from https://github.com/discoverse-dev/MuJoCo-LiDAR/blob/main/examples/unitree_go2_ros2.py
+        fields = [ # https://docs.ros2.org/latest/api/sensor_msgs/msg/PointField.html
+            PointField_(name="x", offset=0, datatype=7, count=1),
+            PointField_(name="y", offset=4, datatype=7, count=1),
+            PointField_(name="z", offset=8, datatype=7, count=1),
+        ]
+        #for i, field in enumerate(fields):
+        #    raise ValueError(self.lidar_data.fields, len(self.lidar_data.fields))
+        #    self.lidar_data.fields[i] = field
+        self.lidar_data.fields = fields
+        self.lidar_data.header.frame_id = "lidar"
+        self.lidar_data.is_bigendian = False
+        self.lidar_data.point_step = 12
+        self.lidar_data.height = 1
+        self.lidar_data.is_dense = True
+
+        self.lidar_data_puber = ChannelPublisher(TOPIC_LIDAR, PointCloud2_)
+        self.lidar_data_puber.Init()
+        self.LidarDataThread = RecurrentThread(
+            interval=self.lidar_dt, target=self.PublishLidarData, name="sim_lidar"
+        )
+        #self.LidarDataThread.Start()
+
+        #self.CombinedDataThread = RecurrentThread(
+        #    interval=self.dt, target=self.CollectivePublisher, name="sim_publisher"
+        #)
+        #self.CombinedDataThread.Start()
+
+        if not self.slower_than_real:
+            self.LidarDataThread.Start()
+            self.WirelessControllerThread.Start()
+            self.HighStateThread.Start()
+            self.lowStateThread.Start()
 
         # joystick
         self.key_map = {
@@ -107,6 +184,8 @@ class UnitreeSdk2Bridge:
             "down": 14,
             "left": 15,
         }
+
+        print ("Finished init")
 
     def LowCmdHandler(self, msg: LowCmd_):
         if self.mj_data != None:
@@ -350,6 +429,47 @@ class UnitreeSdk2Bridge:
             }
         else:
             print("Unsupported gamepad. ")
+
+    def PublishLidarData(self):
+        """
+
+        Todo:
+            - Add simulation time as timestamp
+        """
+
+        if self.FORCE_SYNC:
+            self.locker.acquire()
+        mj_copyData(self.lidar_copy_of_mj_data, self.mj_model, self.mj_data)
+        #mjd_copy = self.mj_data.mj_copyData(self.mj_model)
+        if self.FORCE_SYNC:
+            self.locker.release()
+        
+        self.lidar.trace_rays(self.lidar_copy_of_mj_data, self.rays_theta, self.rays_phi)
+        
+        #self.lidar.trace_rays(self.mj_data, self.rays_theta, self.rays_phi)
+        points = self.lidar.get_hit_points()
+        #raise ValueError(points, self.lidar)
+
+        time_stamp = Time_(0,0) # one day seconds, nanoseconds (int32). What is the time reference?
+
+        self.lidar_data.header.stamp = time_stamp
+        self.lidar_data.row_step = self.lidar_data.point_step * points.shape[0]
+        self.lidar_data.width = points.shape[0]
+        self.lidar_data.data = points.tobytes()
+
+        self.lidar_data_puber.Write(self.lidar_data)
+
+    def CollectivePublisher(self):
+        """Synchronously write data to the topics
+
+        Async can cause collisions, error "ERROR: mj_copyDataVisual: attempting to copy mjData while stack is in use"
+        """
+        self.PublishLowState()
+        self.PublishHighState()
+        if self.mj_data.time - self.last_lidar_time >= self.lidar_dt:
+            self.PublishLidarData()
+
+
 
     def PrintSceneInformation(self):
         print(" ")

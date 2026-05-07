@@ -1,3 +1,11 @@
+This is a fork of the official repo. It adds the lidar interface using https://github.com/discoverse-dev/MuJoCo-LiDAR/blob/main/docs/en/INSTALLATION.md to the Go2 robot.
+
+Our use case only involves the Go2 using Python, so only these parts where changed.
+
+In addition to the original setup, the python package `mujoco_lidar` needs to be installed (see the repo linked above for installing GPU accelerated versions).
+
+LiDAR data should get published via CycloneDDS to the `rt/utlidar/cloud` topic, as this 
+
 # Introduction
 ## Unitree mujoco
 `unitree_mujoco` is a simulator developed based on `Unitree sdk2` and `mujoco`. Users can easily integrate the control programs developed with `Unitree_sdk2`, `unitree_ros2`, and `unitree_sdk2_python` into this simulator, enabling a seamless transition from simulation to physical development. The repository includes two versions of the simulator implemented in C++ and Python, with a structure as follows:

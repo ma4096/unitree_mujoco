@@ -73,8 +73,12 @@
       <geom mesh="base_4" material="gray" class="visual" />
       <geom size="0.1881 0.04675 0.057" type="box" class="collision" />
       <geom size="0.05 0.045" pos="0.285 0 0.01" type="cylinder" class="collision" />
-      <geom size="0.047" pos="0.293 0 -0.06" class="collision" />
+      <geom size="0.047" pos="0.293 0 -0.06" class="collision" /> <!-- This is the box that simulates the collision of the lidar part -->
       <site name="imu" pos="-0.02557 0 0.04232" />
+
+      <!-- Following https://github.com/discoverse-dev/MuJoCo-LiDAR/blob/main/docs/en/USAGE.md -->
+      <site name="lidar" pos="0.295 0 -0.075" quat="0.05 0 1 0" rgba="1 0 0 1" size="0.005"/>
+
       <body name="FL_hip" pos="0.1934 0.0465 0">
         <inertial pos="-0.0054 0.00194 -0.000105" quat="0.497014 0.499245 0.505462 0.498237"
           mass="0.678"

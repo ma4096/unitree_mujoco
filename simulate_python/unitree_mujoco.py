@@ -39,12 +39,15 @@ def SimulationThread():
     global mj_data, mj_model
 
     ChannelFactoryInitialize(config.DOMAIN_ID, config.INTERFACE)
-    unitree = UnitreeSdk2Bridge(mj_model, mj_data)
+    unitree = UnitreeSdk2Bridge(mj_model, mj_data, locker=locker, slower_than_real=False)
 
     if config.USE_JOYSTICK:
+        #raise ValueError("ASDFGSADFGBSDAFGBSDBSDRTTB")
         unitree.SetupJoystick(device_id=0, js_type=config.JOYSTICK_TYPE)
     if config.PRINT_SCENE_INFORMATION:
+        #print("asdfiakohfaspedNPSWERFNESIRsdfknsdfknsdfnsdnSDOFOKJNSADFJKNVASDFKVN")
         unitree.PrintSceneInformation()
+        #raise ValueError("ASDFGSADFGBSDAFGBSDBSDRTTB")
 
     while viewer.is_running():
         step_start = time.perf_counter()
@@ -79,5 +82,7 @@ if __name__ == "__main__":
     viewer_thread = Thread(target=PhysicsViewerThread)
     sim_thread = Thread(target=SimulationThread)
 
+    print("Starting threads...")
     viewer_thread.start()
     sim_thread.start()
+    print("Ending main")

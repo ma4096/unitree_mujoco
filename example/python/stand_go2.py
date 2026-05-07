@@ -6,6 +6,7 @@ from unitree_sdk2py.core.channel import ChannelPublisher, ChannelSubscriber
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize
 from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowCmd_
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowCmd_
+from unitree_sdk2py.idl.sensor_msgs.msg.dds_ import PointCloud2_
 from unitree_sdk2py.utils.crc import CRC
 
 stand_up_joint_pos = np.array([
@@ -26,12 +27,20 @@ crc = CRC()
 
 input("Press enter to start")
 
+def lidar_handler(msg):
+    print(msg.header.frame_id)
+
+
 if __name__ == '__main__':
 
     if len(sys.argv) <2:
         ChannelFactoryInitialize(1, "lo")
     else:
         ChannelFactoryInitialize(0, sys.argv[1])
+
+    # listen to the lidar stream
+    lidar = ChannelSubscriber("rt/utlidar/cloud", PointCloud2_)
+    lidar.Init(lidar_handler, 10)
 
     # Create a publisher to publish the data defined in UserData class
     pub = ChannelPublisher("rt/lowcmd", LowCmd_)
