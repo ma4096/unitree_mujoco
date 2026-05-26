@@ -3,11 +3,20 @@ import mujoco
 import mujoco.viewer
 from threading import Thread
 import threading
+import sys
 
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize
 from unitree_sdk2py_bridge import UnitreeSdk2Bridge, ElasticBand
 
 import config
+
+def update_ui(text): 
+    """Provides a nice console feedback"""
+    sys.stdout.write("\r")
+    sys.stdout.write(" "*15)
+    sys.stdout.write("\r")
+    sys.stdout.write(text)
+    sys.stdout.flush()
 
 
 locker = threading.Lock()
@@ -36,9 +45,11 @@ dim_motor_sensor_ = 3 * num_motor_
 
 time.sleep(0.2)
 
+stats_counter = 50
+stats_timer = time.perf_counter()
 
 def SimulationThread():
-    global mj_data, mj_model, unitree
+    global mj_data, mj_model, unitree, stats_timer, stats_counter
 
     if config.USE_JOYSTICK:
         #raise ValueError("ASDFGSADFGBSDAFGBSDBSDRTTB")
@@ -70,6 +81,11 @@ def SimulationThread():
         if time_until_next_step > 0:
             time.sleep(time_until_next_step)
 
+        stats_counter -= 1
+        if stats_counter <= 0:
+            stats_counter = 50
+            update_ui(f"{(50/(time.perf_counter() - stats_timer)):.4f} steps/s")
+            stats_timer = time.perf_counter()
 
 def PhysicsViewerThread():
     while viewer.is_running():
