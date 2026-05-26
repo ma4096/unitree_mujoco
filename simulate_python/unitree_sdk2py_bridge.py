@@ -19,10 +19,12 @@ if config.ROBOT=="g1":
     from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_
     from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
     from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowState_ as LowState_default
+    from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowCmd_ as LowCmd_default
 else:
     from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowCmd_
     from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowState_
     from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowState_ as LowState_default
+    from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowCmd_ as LowCmd_default
 
 from unitree_sdk2py.idl.sensor_msgs.msg.dds_ import PointCloud2_, PointField_
 from unitree_sdk2py.idl.default import sensor_msgs_msg_dds__PointField_Constants_PointCloud2_ as PointCloud2_default
@@ -111,6 +113,7 @@ class UnitreeSdk2Bridge:
         #    name="sim_wireless_controller",
         #)
 
+        self.low_cmd = LowCmd_default()
         self.low_cmd_suber = ChannelSubscriber(TOPIC_LOWCMD, LowCmd_)
         self.low_cmd_suber.Init(self.LowCmdHandler, 10)
 
@@ -205,6 +208,11 @@ class UnitreeSdk2Bridge:
             - The PD controller should be decoupled from the LowCmdHandler and updated at 500Hz to match the real robot
             - Currently, not sending LowCmds at 500Hz causes incorrect behaviour as the torque stays constant
         """
+        self.low_cmd = msg
+
+
+    def PDControllerUpdate(self):
+        msg = self.low_cmd
         if self.mj_data != None:
             for i in range(self.num_motor):
                 self.mj_data.ctrl[i] = (
@@ -477,6 +485,11 @@ class UnitreeSdk2Bridge:
         self.lidar_data_puber.Write(self.lidar_data)
 
     def MuJoCo_timestep(self):
+        """Publish messages if it is their turns
+
+        Additionally updates the PD controller.
+        """
+        self.PDControllerUpdate()
         for subject in self.timings_converted:
             subject[1] += 1
             if subject[0] <= subject[1]:
@@ -529,6 +542,12 @@ class UnitreeSdk2Bridge:
             index = index + self.mj_model.sensor_dim[i]
         print(" ")
 
+    def MujocoKeyCallback(self, key):
+        glfw = mujoco.glfw.glfw
+        match key:
+            case glfw.KEY_BACKSPACE:
+                self.low_cmd = LowCmd_default()
+
 
 class ElasticBand:
 
@@ -552,7 +571,7 @@ class ElasticBand:
         f = (self.stiffness * (distance - self.length) - self.damping * v) * direction
         return f
 
-    def MujuocoKeyCallback(self, key):
+    def MujucoKeyCallback(self, key):
         glfw = mujoco.glfw.glfw
         if key == glfw.KEY_7:
             self.length -= 0.1

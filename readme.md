@@ -1,10 +1,14 @@
 This is a fork of the official repo. It adds the lidar interface using https://github.com/discoverse-dev/MuJoCo-LiDAR/blob/main/docs/en/INSTALLATION.md to the Go2 robot.
 
+Other patches:
+- Messages get published not based on real time progress (like 500Hz), but on simulation time. E.g., if the simulation can't run in realtime, this will make it possible to run slower, as long as your controller that writes to `rt/lowcmd` follows the same logic, like our `isem_go2_interface` (https://github.com/ma4096/isem_go2_interface)
+- The PD controller that calculates the motor torques is decoupled from arriving messages on `rt/lowcmd`. This prevents the robot from "cramping" when the command stream ends. This better simulates the real robot.
+
 Our use case only involves the Go2 using Python, so only these parts where changed.
 
 In addition to the original setup, the python package `mujoco_lidar` needs to be installed (see the repo linked above for installing GPU accelerated versions).
 
-LiDAR data should get published via CycloneDDS to the `rt/utlidar/cloud` topic, as this 
+LiDAR data gets published via CycloneDDS to the `rt/utlidar/cloud` topic at 10Hz.
 
 # Introduction
 ## Unitree mujoco
