@@ -40,18 +40,17 @@ NUM_MOTOR_IDL_HG = 35
 
 class UnitreeSdk2Bridge:
 
-    def __init__(self, mj_model, mj_data, locker=None, slower_than_real=False):
+    def __init__(self, mj_model, mj_data, locker=None):
         self.mj_model = mj_model
         self.mj_data = mj_data
 
-        self.slower_than_real = slower_than_real # blocks starting the 500Hz threads in favour of calling them from the simulation thread when the correct time has passed
 
         self.FORCE_SYNC = False
         if locker is not None:
             self.locker = locker
             self.FORCE_SYNC = True
 
-        self.lidar_dt = 0.1
+        
         self.last_lidar_time = mj_data.time
         self.lidar_copy_of_mj_data = MjData(mj_model)
 
@@ -63,6 +62,18 @@ class UnitreeSdk2Bridge:
         self.idl_type = (self.num_motor > NUM_MOTOR_IDL_GO) # 0: unitree_go, 1: unitree_hg
 
         self.joystick = None
+
+        # timesteps
+        self.base_frequency = int(1/self.dt)
+        assert self.base_frequency % 500 == 0, "Base frequency (SIMULATE_DT in s in the config.py) must be a multiple of 500Hz (at least 0.02s)"
+
+        self.timings = { # [frequency in Hz, tracker (always 0), function]
+            "low_state": [500, 0, self.PublishLowState],
+            "high_state": [500, 0, self.PublishHighState],
+            "wireless_controller": [100, 0, self.PublishWirelessController],
+            "lidar": [10, 0, self.PublishLidarData]
+        }
+        self.timings_converted = [[int(self.base_frequency/x[0]), x[1], x[2]] for x in self.timings.values()]
 
         # Check sensor
         for i in range(self.dim_motor_sensor, self.mj_model.nsensor):
@@ -78,27 +89,27 @@ class UnitreeSdk2Bridge:
         self.low_state = LowState_default()
         self.low_state_puber = ChannelPublisher(TOPIC_LOWSTATE, LowState_)
         self.low_state_puber.Init()
-        self.lowStateThread = RecurrentThread(
-            interval=self.dt, target=self.PublishLowState, name="sim_lowstate"
-        )
+        #self.lowStateThread = RecurrentThread(
+        #    interval=self.dt, target=self.PublishLowState, name="sim_lowstate"
+        #)
 
         self.high_state = unitree_go_msg_dds__SportModeState_()
         self.high_state_puber = ChannelPublisher(TOPIC_HIGHSTATE, SportModeState_)
         self.high_state_puber.Init()
-        self.HighStateThread = RecurrentThread(
-            interval=self.dt, target=self.PublishHighState, name="sim_highstate"
-        )
+        #self.HighStateThread = RecurrentThread(
+        #    interval=self.dt, target=self.PublishHighState, name="sim_highstate"
+        #)
 
         self.wireless_controller = unitree_go_msg_dds__WirelessController_()
         self.wireless_controller_puber = ChannelPublisher(
             TOPIC_WIRELESS_CONTROLLER, WirelessController_
         )
         self.wireless_controller_puber.Init()
-        self.WirelessControllerThread = RecurrentThread(
-            interval=0.01,
-            target=self.PublishWirelessController,
-            name="sim_wireless_controller",
-        )
+        #self.WirelessControllerThread = RecurrentThread(
+        #    interval=0.01,
+        #    target=self.PublishWirelessController,
+        #    name="sim_wireless_controller",
+        #)
 
         self.low_cmd_suber = ChannelSubscriber(TOPIC_LOWCMD, LowCmd_)
         self.low_cmd_suber.Init(self.LowCmdHandler, 10)
@@ -149,21 +160,16 @@ class UnitreeSdk2Bridge:
 
         self.lidar_data_puber = ChannelPublisher(TOPIC_LIDAR, PointCloud2_)
         self.lidar_data_puber.Init()
-        self.LidarDataThread = RecurrentThread(
-            interval=self.lidar_dt, target=self.PublishLidarData, name="sim_lidar"
-        )
+        #self.LidarDataThread = RecurrentThread(
+        #    interval=self.lidar_dt, target=self.PublishLidarData, name="sim_lidar"
+        #)
         #self.LidarDataThread.Start()
 
-        #self.CombinedDataThread = RecurrentThread(
-        #    interval=self.dt, target=self.CollectivePublisher, name="sim_publisher"
-        #)
-        #self.CombinedDataThread.Start()
-
-        if not self.slower_than_real:
-            self.LidarDataThread.Start()
-            self.WirelessControllerThread.Start()
-            self.HighStateThread.Start()
-            self.lowStateThread.Start()
+        #if not self.slower_than_real:
+        #    self.LidarDataThread.Start()
+        #    self.WirelessControllerThread.Start()
+        #    self.HighStateThread.Start()
+        #    self.lowStateThread.Start()
 
         # joystick
         self.key_map = {
@@ -185,9 +191,20 @@ class UnitreeSdk2Bridge:
             "left": 15,
         }
 
-        print ("Finished init")
+        print("Finished init")
 
     def LowCmdHandler(self, msg: LowCmd_):
+        """Update the torque applied to each motor using a LowCmd
+
+        Implements a PD controller.
+
+        Args:
+            msg (LowCmd_): Command to be executed
+
+        Todo:
+            - The PD controller should be decoupled from the LowCmdHandler and updated at 500Hz to match the real robot
+            - Currently, not sending LowCmds at 500Hz causes incorrect behaviour as the torque stays constant
+        """
         if self.mj_data != None:
             for i in range(self.num_motor):
                 self.mj_data.ctrl[i] = (
@@ -459,15 +476,12 @@ class UnitreeSdk2Bridge:
 
         self.lidar_data_puber.Write(self.lidar_data)
 
-    def CollectivePublisher(self):
-        """Synchronously write data to the topics
-
-        Async can cause collisions, error "ERROR: mj_copyDataVisual: attempting to copy mjData while stack is in use"
-        """
-        self.PublishLowState()
-        self.PublishHighState()
-        if self.mj_data.time - self.last_lidar_time >= self.lidar_dt:
-            self.PublishLidarData()
+    def MuJoCo_timestep(self):
+        for subject in self.timings_converted:
+            subject[1] += 1
+            if subject[0] <= subject[1]:
+                subject[2]()
+                subject[1] = 0
 
 
 

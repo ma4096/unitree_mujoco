@@ -39,7 +39,7 @@ def SimulationThread():
     global mj_data, mj_model
 
     ChannelFactoryInitialize(config.DOMAIN_ID, config.INTERFACE)
-    unitree = UnitreeSdk2Bridge(mj_model, mj_data, locker=locker, slower_than_real=False)
+    unitree = UnitreeSdk2Bridge(mj_model, mj_data, locker=locker)
 
     if config.USE_JOYSTICK:
         #raise ValueError("ASDFGSADFGBSDAFGBSDBSDRTTB")
@@ -62,6 +62,8 @@ def SimulationThread():
         mujoco.mj_step(mj_model, mj_data)
 
         locker.release()
+
+        unitree.MuJoCo_timestep()
 
         time_until_next_step = mj_model.opt.timestep - (
             time.perf_counter() - step_start
