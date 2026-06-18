@@ -23,8 +23,10 @@ if config.ROBOT=="g1":
 else:
     from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowCmd_
     from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowState_
+    from unitree_sdk2py.idl.unitree_go.msg.dds_ import Go2FrontVideoData_
     from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowState_ as LowState_default
     from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowCmd_ as LowCmd_default
+    from unitree_sdk2py.idl.default import unitree_go_msg_dds__Go2FrontVideoData_ as Go2FrontVideoData_default
 
 from unitree_sdk2py.idl.sensor_msgs.msg.dds_ import PointCloud2_, PointField_
 from unitree_sdk2py.idl.default import sensor_msgs_msg_dds__PointField_Constants_PointCloud2_ as PointCloud2_default
@@ -35,6 +37,7 @@ TOPIC_LOWSTATE = "rt/lowstate"
 TOPIC_HIGHSTATE = "rt/sportmodestate"
 TOPIC_WIRELESS_CONTROLLER = "rt/wirelesscontroller"
 TOPIC_LIDAR = "rt/utlidar/cloud"
+TOPIC_RANGEFINDER = "rt/realsense/depth"
 
 MOTOR_SENSOR_NUM = 3
 NUM_MOTOR_IDL_GO = 20
@@ -73,7 +76,8 @@ class UnitreeSdk2Bridge:
             "low_state": [500, 0, self.PublishLowState],
             "high_state": [500, 0, self.PublishHighState],
             "wireless_controller": [100, 0, self.PublishWirelessController],
-            "lidar": [10, 0, self.PublishLidarData]
+            "lidar": [10, 0, self.PublishLidarData],
+            "rangefinder": [10, 0, self.PublishRangeFinder] # these 100 Hz are a guess at the moment
         }
         self.timings_converted = [[int(self.base_frequency/x[0]), x[1], x[2]] for x in self.timings.values()]
 
@@ -151,9 +155,6 @@ class UnitreeSdk2Bridge:
             PointField_(name="y", offset=4, datatype=7, count=1),
             PointField_(name="z", offset=8, datatype=7, count=1),
         ]
-        #for i, field in enumerate(fields):
-        #    raise ValueError(self.lidar_data.fields, len(self.lidar_data.fields))
-        #    self.lidar_data.fields[i] = field
         self.lidar_data.fields = fields
         self.lidar_data.header.frame_id = "lidar"
         self.lidar_data.is_bigendian = False
@@ -168,11 +169,11 @@ class UnitreeSdk2Bridge:
         #)
         #self.LidarDataThread.Start()
 
-        #if not self.slower_than_real:
-        #    self.LidarDataThread.Start()
-        #    self.WirelessControllerThread.Start()
-        #    self.HighStateThread.Start()
-        #    self.lowStateThread.Start()
+        self.rangefinder_puber = ChannelPublisher(TOPIC_RANGEFINDER, Go2FrontVideoData_)
+        self.rangefinder_puber.Init()
+        self.rangefinder_data = Go2FrontVideoData_default()
+
+
 
         # joystick
         self.key_map = {
@@ -351,6 +352,23 @@ class UnitreeSdk2Bridge:
 
         self.high_state_puber.Write(self.high_state)
 
+    def PublishRangeFinder(self):
+        """Publish a (depth) image based on the 
+        """
+        if self.mj_data != None:
+            data = self.mj_data.sensordata[52:52+150]
+            #print(, len(self.mj_data.sensordata))
+
+            # compression algorithm to map float64 data into uint8
+            # use 0.3m - 3m as range, everything else just floor or ciel
+            # another "compression" idea would be to extend the sequence to eight times the resolution (float64 vs uint8) to fit it all into uint8
+            compressed = ((data - 0.3)*255/29.7)
+            #print(data, "\n", compressed)
+            self.rangefinder_data.video180p = compressed.astype(np.uint8).tolist()
+
+        #print(self.rangefinder_data)
+        self.rangefinder_puber.Write(self.rangefinder_data)
+
     def PublishWirelessController(self):
         if self.joystick != None:
             pygame.event.get()
@@ -461,6 +479,8 @@ class UnitreeSdk2Bridge:
         Todo:
             - Add simulation time as timestamp
         """
+        # DISABLED
+        return
 
         if self.FORCE_SYNC:
             self.locker.acquire()

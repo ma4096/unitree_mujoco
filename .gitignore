@@ -4,3 +4,6 @@
 **/log/
 **/install/
 simulate/mujoco
+*test_scene.xml
+**/assets/*
+screenshot.png
